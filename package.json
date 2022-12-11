@@ -18,7 +18,7 @@
   "scripts": {
     "ng": "ng",
     "start": "ng serve --configuration=dev",
-    "build": "ng build",
+    "build": "ng build --configuration=dev --base-href=/@mxtommy/kip/",
     "build-npm": "ng build --configuration=production --base-href=/@mxtommy/kip/",
     "test": "ng test",
     "lint": "ng lint",

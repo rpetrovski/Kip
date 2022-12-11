@@ -53,6 +53,7 @@ export class WidgetHistoricalComponent implements OnInit, OnDestroy {
   chartDataMin = [];
   chartDataAvg = [];
   chartDataMax = [];
+  unprocessed = [];
 
   textColor; // store the color of text for the graph...
 
@@ -195,48 +196,118 @@ export class WidgetHistoricalComponent implements OnInit, OnDestroy {
     }
   }
 
+  private cleanupData(raw, valueField, flankSize) {
+    let FLANK_SIZE = flankSize;
+    if (raw === null) {
+      return raw;
+    }
+
+    let tmp = [];
+    for (let i = 0; i < raw.length; ++i) {
+      if (raw[i].average === null) {
+        // skip over empty values
+        continue;
+      }
+      tmp.push({timestamp: raw[i].timestamp, value: raw[i][valueField] });
+    }
+
+    if (tmp.length < FLANK_SIZE * 2 + 1) {
+       return null;
+    }
+
+    tmp = tmp.sort((a,b) => a.timestamp - b.timestamp).filter(function(item, pos, ary) {return !pos || item.timestamp != ary[pos - 1].timestamp});
+
+    let ret = [];
+    let dump  = false;
+    for (let i = FLANK_SIZE; i < tmp.length - FLANK_SIZE; i++){
+      // this simple trick will remove sensor outliers that don't follow the smooth transition pattern between the points
+      let med = tmp.slice(i - FLANK_SIZE, i + FLANK_SIZE + 1).map(a => a.value).sort()[FLANK_SIZE];
+      if (med != tmp[i].value && Math.abs(med - tmp[i].value) > Math.abs(med) * 4) {
+//        console.log(valueField, " excess ", this.config.displayName,  tmp.slice(i - FLANK_SIZE, i + FLANK_SIZE + 1));
+        dump = true;
+      }
+      let ts = tmp[i].timestamp;
+      ret.push({timestamp: ts, y: med});
+    }
+
+    if (dump) {
+      console.log("excess ", this.config.displayName, valueField, raw);
+ //     for (let i = 0; i < raw.length; i++){
+ //       console.log(this.config.displayName, i, raw[i]);
+ //     }
+    }
+
+    return ret;
+  }
+
+
+  private reduceData(input, valueField, maxPoints) {
+    if (input === null) {
+      return null;
+    }
+
+    let noNulls = input.filter(function(item) {return item[valueField] !== null;});
+    let unique = noNulls.filter(function(item, pos, ary) {return !pos || item.timestamp != ary[pos - 1].timestamp});
+    let translated = unique.map(a => ({timestamp: a.timestamp, y: a[valueField]}));
+
+ //   if (translated.length <= maxPoints) {
+ //     return translated;
+ //   }
+
+    let ret = [];
+    let chunkSize = Math.max(3, Math.floor(translated.length / maxPoints));
+    let halfChunk = Math.floor(chunkSize / 2);
+    for (let i = halfChunk; i < translated.length - halfChunk; i += chunkSize) {
+      //let chunk = Math.min(translated.length - i, chunkSize);
+      // ret.push({timestamp: translated[i].timestamp, y: translated.slice(i, Math.min(translated.length, i + chunk)).reduce((p, c) => p + c.y, 0) / chunk});
+      // ret.push(translated.slice(i, Math.min(translated.length, i + chunk)).sort(a => a.y)[chunk/2]);
+      let slice = translated.slice(i - halfChunk, i + halfChunk + 1);
+      ret.push({timestamp: translated[i].timestamp, y: slice.sort((a, b) => (a.y - b.y))[halfChunk].y});
+    }
+    return ret;
+  }
+
   private subscribeDataSet() {
       this.unsubscribeDataSet();
       if (this.config.dataSetUUID === null) { return } // nothing to sub to...
 
       this.dataSetSub = this.DataSetService.subscribeDataSet(this.widgetUUID, this.config.dataSetUUID).subscribe(
           dataSet => {
-              if (dataSet === null) {
+
+              let filtered = this.reduceData(dataSet, 'average', 24*2);
+              if (filtered === null) {
                 return; // we will get null back if we subscribe to a dataSet before the app has started it. When it learns about it we will get first value
               }
               let invert = 1;
               if (this.config.invertData) { invert = -1; }
               //Avg
               this.chartDataAvg = [];
-              for (let i=0;i<dataSet.length;i++){
-                if (dataSet[i].average === null) {
-                  this.chartDataAvg.push({x: dataSet[i].timestamp, y: null });
-                  continue;
-                }
-                this.chartDataAvg.push({
-                  x: dataSet[i].timestamp,
-            y: (this.UnitsService.convertUnit(this.config.convertUnitTo, dataSet[i].average) * invert)
-                });
+              for (let i = 0; i < filtered.length; ++i) {
+                this.chartDataAvg.push({x: filtered[i].timestamp, y: (this.UnitsService.convertUnit(this.config.convertUnitTo, filtered[i].y) * invert)});
               }
+              let last = this.unprocessed.pop();
+              this.unprocessed.length = 0;
+              //this.unprocessed.push(last);
+
               this.chart.config.data.datasets[0].data = this.chartDataAvg;
 
               //min/max
               if (this.config.displayMinMax) {
                 this.chartDataMin = [];
                 this.chartDataMax = [];
-                for (let i=0;i<dataSet.length;i++){
-                  //process datapoint and add it to our chart.
-                  if (dataSet[i].average === null) {
-                    this.chartDataMin.push({x: dataSet[i].timestamp, y: null });
-                  } else {
-                    this.chartDataMin.push({
-                        x: dataSet[i].timestamp,
-                y: (this.UnitsService.convertUnit(this.config.convertUnitTo, dataSet[i].minValue) * invert)
-                    });
-                    this.chartDataMax.push({
-                        x: dataSet[i].timestamp,
-                y: (this.UnitsService.convertUnit(this.config.convertUnitTo, dataSet[i].maxValue) * invert)
-                    });
+
+                let filteredMin = this.reduceData(dataSet, 'minValue', 24 * 2);
+                if ( filteredMin !== null) {
+                  for (let i=0;i<filteredMin.length;i++){ 
+                    //process datapoint and add it to our chart. 
+                    this.chartDataMin.push({x: filteredMin[i].timestamp, y: (this.UnitsService.convertUnit(this.config.convertUnitTo, filteredMin[i].y) * invert)});
+                  }
+                }
+
+                let filteredMax = this.reduceData(dataSet, 'maxValue', 24 * 2);
+                if ( filteredMax !== null) {
+                  for (let i=0;i<filteredMax.length;i++){
+                    this.chartDataMax.push({x: filteredMax[i].timestamp, y: (this.UnitsService.convertUnit(this.config.convertUnitTo, filteredMax[i].y) * invert)});
                   }
                 }
                 this.chart.config.data.datasets[1].data = this.chartDataMin;
