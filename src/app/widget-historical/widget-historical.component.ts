@@ -196,51 +196,6 @@ export class WidgetHistoricalComponent implements OnInit, OnDestroy {
     }
   }
 
-  private cleanupData(raw, valueField, flankSize) {
-    let FLANK_SIZE = flankSize;
-    if (raw === null) {
-      return raw;
-    }
-
-    let tmp = [];
-    for (let i = 0; i < raw.length; ++i) {
-      if (raw[i].average === null) {
-        // skip over empty values
-        continue;
-      }
-      tmp.push({timestamp: raw[i].timestamp, value: raw[i][valueField] });
-    }
-
-    if (tmp.length < FLANK_SIZE * 2 + 1) {
-       return null;
-    }
-
-    tmp = tmp.sort((a,b) => a.timestamp - b.timestamp).filter(function(item, pos, ary) {return !pos || item.timestamp != ary[pos - 1].timestamp});
-
-    let ret = [];
-    let dump  = false;
-    for (let i = FLANK_SIZE; i < tmp.length - FLANK_SIZE; i++){
-      // this simple trick will remove sensor outliers that don't follow the smooth transition pattern between the points
-      let med = tmp.slice(i - FLANK_SIZE, i + FLANK_SIZE + 1).map(a => a.value).sort()[FLANK_SIZE];
-      if (med != tmp[i].value && Math.abs(med - tmp[i].value) > Math.abs(med) * 4) {
-//        console.log(valueField, " excess ", this.config.displayName,  tmp.slice(i - FLANK_SIZE, i + FLANK_SIZE + 1));
-        dump = true;
-      }
-      let ts = tmp[i].timestamp;
-      ret.push({timestamp: ts, y: med});
-    }
-
-    if (dump) {
-      console.log("excess ", this.config.displayName, valueField, raw);
- //     for (let i = 0; i < raw.length; i++){
- //       console.log(this.config.displayName, i, raw[i]);
- //     }
-    }
-
-    return ret;
-  }
-
-
   private reduceData(input, valueField, maxPoints) {
     if (input === null) {
       return null;
@@ -250,17 +205,10 @@ export class WidgetHistoricalComponent implements OnInit, OnDestroy {
     let unique = noNulls.filter(function(item, pos, ary) {return !pos || item.timestamp != ary[pos - 1].timestamp});
     let translated = unique.map(a => ({timestamp: a.timestamp, y: a[valueField]}));
 
- //   if (translated.length <= maxPoints) {
- //     return translated;
- //   }
-
     let ret = [];
     let chunkSize = Math.max(3, Math.floor(translated.length / maxPoints));
     let halfChunk = Math.floor(chunkSize / 2);
     for (let i = halfChunk; i < translated.length - halfChunk; i += chunkSize) {
-      //let chunk = Math.min(translated.length - i, chunkSize);
-      // ret.push({timestamp: translated[i].timestamp, y: translated.slice(i, Math.min(translated.length, i + chunk)).reduce((p, c) => p + c.y, 0) / chunk});
-      // ret.push(translated.slice(i, Math.min(translated.length, i + chunk)).sort(a => a.y)[chunk/2]);
       let slice = translated.slice(i - halfChunk, i + halfChunk + 1);
       ret.push({timestamp: translated[i].timestamp, y: slice.sort((a, b) => (a.y - b.y))[halfChunk].y});
     }
