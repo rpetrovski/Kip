@@ -54,6 +54,8 @@ export class WidgetHistoricalComponent implements OnInit, OnDestroy {
   chartDataAvg = [];
   chartDataMax = [];
   unprocessed = [];
+  center_ = null;
+  range_ = null;
 
   textColor; // store the color of text for the graph...
 
@@ -146,6 +148,7 @@ export class WidgetHistoricalComponent implements OnInit, OnDestroy {
             ...(this.config.includeZero && { beginAtZero: true}),
             ticks: {
               color: this.textColor,
+              callback: this.config.verticalGraph ? this.centeredTickLabel.bind(this) : null,
               autoSkip: true,
               autoSkipPadding: 40
             }
@@ -196,6 +199,35 @@ export class WidgetHistoricalComponent implements OnInit, OnDestroy {
     }
   }
 
+  private toUser(centered) {
+    let v = centered;
+    let c = this.center_;
+    let r = this.range_;
+    let ret = ((0 > v ? v + r : v) + c) % r;
+    return Math.round(ret);
+  }
+
+  private toCentered(user) {
+    // shift so that center value is at 0 in the middle of the scale
+    let centered = user - this.center_;
+    // deal with parts that are < -180 or > 180 degree
+    centered = 
+      centered > (this.range_ / 2) ? (centered - this.range_) : 
+      centered < -(this.range_ / 2) ? (centered + this.range_) : 
+      centered;
+    return centered;
+  }
+
+  private centeredTickLabel(_value, index, values) {
+    if (this.center_ === null) {
+      return values[index];
+    }
+
+    let ret = this.toUser(_value);
+    return ret;
+  }
+
+
   private reduceData(input, valueField, maxPoints) {
     if (input === null) {
       return null;
@@ -212,6 +244,35 @@ export class WidgetHistoricalComponent implements OnInit, OnDestroy {
       let slice = translated.slice(i - halfChunk, i + halfChunk + 1);
       ret.push({timestamp: translated[i].timestamp, y: slice.sort((a, b) => (a.y - b.y))[halfChunk].y});
     }
+    return this.centerData(this.applyUnits(ret));
+  }
+
+  private applyUnits(input) {
+    if (null === input || input.length < 1) {
+      return input;
+    }
+
+    let invert = this.config.invertData ? - 1 : 1;    
+    let ret = input.map((a) => (
+      {timestamp: a.timestamp, 
+       y: this.UnitsService.convertUnit(this.config.convertUnitTo, a.y) * invert}));
+
+    return ret;
+  }
+
+  private centerData(input) {
+    if (null === input || input.length < 1) {
+      return input;
+    }
+
+    this.range_ = this.chart.options.scales.x.suggestedMax - this.chart.options.scales.x.suggestedMin;
+    if (this.center_ === null) {
+      let c = input[input.length - 1].y;
+      let step = (this.range_ / 8);
+      this.center_ = Math.ceil(c / step) * step;
+    }
+
+    let ret = input.map(a => ({timestamp: a.timestamp, y: this.toCentered(a.y)}));
     return ret;
   }
 
@@ -222,16 +283,21 @@ export class WidgetHistoricalComponent implements OnInit, OnDestroy {
       this.dataSetSub = this.DataSetService.subscribeDataSet(this.widgetUUID, this.config.dataSetUUID).subscribe(
           dataSet => {
 
+              this.center_ = null;
               let filtered = this.reduceData(dataSet, 'average', 24*2);
               if (filtered === null) {
                 return; // we will get null back if we subscribe to a dataSet before the app has started it. When it learns about it we will get first value
               }
+              this.chart.config.options.scales.x.min = -this.range_ / 2;
+              this.chart.config.options.scales.x.max = this.range_ / 2;
+              this.chart.config.options.scales.x.ticks.stepSize = this.range_ / 8;
+
               let invert = 1;
               if (this.config.invertData) { invert = -1; }
               //Avg
               this.chartDataAvg = [];
               for (let i = 0; i < filtered.length; ++i) {
-                this.chartDataAvg.push({x: filtered[i].timestamp, y: (this.UnitsService.convertUnit(this.config.convertUnitTo, filtered[i].y) * invert)});
+                this.chartDataAvg.push({x: filtered[i].timestamp, y: filtered[i].y});
               }
               let last = this.unprocessed.pop();
               this.unprocessed.length = 0;
@@ -248,14 +314,14 @@ export class WidgetHistoricalComponent implements OnInit, OnDestroy {
                 if ( filteredMin !== null) {
                   for (let i=0;i<filteredMin.length;i++){ 
                     //process datapoint and add it to our chart. 
-                    this.chartDataMin.push({x: filteredMin[i].timestamp, y: (this.UnitsService.convertUnit(this.config.convertUnitTo, filteredMin[i].y) * invert)});
+                    this.chartDataMin.push({x: filteredMin[i].timestamp, y: filteredMin[i].y});
                   }
                 }
 
                 let filteredMax = this.reduceData(dataSet, 'maxValue', 24 * 2);
                 if ( filteredMax !== null) {
                   for (let i=0;i<filteredMax.length;i++){
-                    this.chartDataMax.push({x: filteredMax[i].timestamp, y: (this.UnitsService.convertUnit(this.config.convertUnitTo, filteredMax[i].y) * invert)});
+                    this.chartDataMax.push({x: filteredMax[i].timestamp, y: filteredMax[i].y});
                   }
                 }
                 this.chart.config.data.datasets[1].data = this.chartDataMin;
