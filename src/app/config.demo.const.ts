@@ -238,7 +238,8 @@ export const DemoWidgetConfig: IWidgetConfig = {
         "includeZero": true,
         "minValue": null,
         "maxValue": null,
-        "verticalGraph": false
+        "verticalGraph": false,
+        "rotaryAxis": false
       }
     },
     {

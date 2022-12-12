@@ -56,6 +56,7 @@ export interface IWidgetSvcConfig {
   animateGraph?: boolean;
   includeZero?: boolean;
   verticalGraph?: boolean;
+  rotaryAxis?: boolean;
 
   //Puts
   putEnable?: boolean;

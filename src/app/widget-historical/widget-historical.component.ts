@@ -22,6 +22,7 @@ const defaultConfig: IWidgetSvcConfig = {
   minValue: null,
   maxValue: null,
   verticalGraph: false,
+  rotaryAxis: false
 };
 
 interface IDataSetOptions {
@@ -53,7 +54,6 @@ export class WidgetHistoricalComponent implements OnInit, OnDestroy {
   chartDataMin = [];
   chartDataAvg = [];
   chartDataMax = [];
-  unprocessed = [];
   center_ = null;
   range_ = null;
 
@@ -148,7 +148,7 @@ export class WidgetHistoricalComponent implements OnInit, OnDestroy {
             ...(this.config.includeZero && { beginAtZero: true}),
             ticks: {
               color: this.textColor,
-              callback: this.config.verticalGraph ? this.centeredTickLabel.bind(this) : null,
+              callback: this.centeredTickLabel.bind(this),
               autoSkip: true,
               autoSkipPadding: 40
             }
@@ -219,8 +219,8 @@ export class WidgetHistoricalComponent implements OnInit, OnDestroy {
   }
 
   private centeredTickLabel(_value, index, values) {
-    if (this.center_ === null) {
-      return values[index];
+    if (this.center_ === null || !this.config.rotaryAxis) {
+      return _value;
     }
 
     let ret = this.toUser(_value);
@@ -237,14 +237,16 @@ export class WidgetHistoricalComponent implements OnInit, OnDestroy {
     let unique = noNulls.filter(function(item, pos, ary) {return !pos || item.timestamp != ary[pos - 1].timestamp});
     let translated = unique.map(a => ({timestamp: a.timestamp, y: a[valueField]}));
 
-    let ret = [];
+    let clean = [];
     let chunkSize = Math.max(3, Math.floor(translated.length / maxPoints));
     let halfChunk = Math.floor(chunkSize / 2);
     for (let i = halfChunk; i < translated.length - halfChunk; i += chunkSize) {
       let slice = translated.slice(i - halfChunk, i + halfChunk + 1);
-      ret.push({timestamp: translated[i].timestamp, y: slice.sort((a, b) => (a.y - b.y))[halfChunk].y});
+      clean.push({timestamp: translated[i].timestamp, y: slice.sort((a, b) => (a.y - b.y))[halfChunk].y});
     }
-    return this.centerData(this.applyUnits(ret));
+
+    let units = this.applyUnits(clean);
+    return this.config.rotaryAxis ? this.centerData(units, 'average' == valueField) : units;
   }
 
   private applyUnits(input) {
@@ -260,13 +262,28 @@ export class WidgetHistoricalComponent implements OnInit, OnDestroy {
     return ret;
   }
 
-  private centerData(input) {
+  private centerData(input, recenter) {
     if (null === input || input.length < 1) {
       return input;
     }
 
-    this.range_ = this.chart.options.scales.x.suggestedMax - this.chart.options.scales.x.suggestedMin;
-    if (this.center_ === null) {
+    //let xAxis = this.config.verticalGraph ? 'y' : 'x';
+    let yAxis = this.config.verticalGraph ? 'x' : 'y';
+
+    if (this.chart.config.options.scales[yAxis].suggestedMax == null ||
+        this.chart.config.options.scales[yAxis].suggestedMin == null) {
+      this.range_ = null;
+      this.center_ = null;
+      return input;
+    }
+
+    this.range_ = this.chart.config.options.scales[yAxis].suggestedMax - this.chart.config.options.scales[yAxis].suggestedMin;
+
+    this.chart.config.options.scales[yAxis].min = -this.range_ / 2;
+    this.chart.config.options.scales[yAxis].max = this.range_ / 2;
+    this.chart.config.options.scales[yAxis].ticks.stepSize = this.range_ / 8;
+
+    if (recenter) {
       let c = input[input.length - 1].y;
       let step = (this.range_ / 8);
       this.center_ = Math.ceil(c / step) * step;
@@ -283,25 +300,15 @@ export class WidgetHistoricalComponent implements OnInit, OnDestroy {
       this.dataSetSub = this.DataSetService.subscribeDataSet(this.widgetUUID, this.config.dataSetUUID).subscribe(
           dataSet => {
 
-              this.center_ = null;
               let filtered = this.reduceData(dataSet, 'average', 24*2);
               if (filtered === null) {
                 return; // we will get null back if we subscribe to a dataSet before the app has started it. When it learns about it we will get first value
               }
-              this.chart.config.options.scales.x.min = -this.range_ / 2;
-              this.chart.config.options.scales.x.max = this.range_ / 2;
-              this.chart.config.options.scales.x.ticks.stepSize = this.range_ / 8;
-
-              let invert = 1;
-              if (this.config.invertData) { invert = -1; }
               //Avg
               this.chartDataAvg = [];
               for (let i = 0; i < filtered.length; ++i) {
                 this.chartDataAvg.push({x: filtered[i].timestamp, y: filtered[i].y});
               }
-              let last = this.unprocessed.pop();
-              this.unprocessed.length = 0;
-              //this.unprocessed.push(last);
 
               this.chart.config.data.datasets[0].data = this.chartDataAvg;
 
