@@ -223,7 +223,20 @@ export class WidgetHistoricalComponent implements OnInit, OnDestroy {
       return _value;
     }
 
-    let ret = this.toUser(_value);
+    const compassRose = {
+     0: "N",
+     45: "ne",
+     90: "E",
+     135: "se",
+     180: "S",
+     225: "sw",
+     270: "W",
+     315: "nw",
+   };
+   const lookupDirection = (direction) => compassRose[direction] || direction;
+
+    let ret = lookupDirection(this.toUser(_value));
+    
     return ret;
   }
 
