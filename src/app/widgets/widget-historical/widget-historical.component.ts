@@ -6,7 +6,6 @@ import 'chartjs-adapter-date-fns';
 
 Chart.register();
 
-
 import { DataSetService } from '../../core/services/data-set.service';
 import { BaseWidgetComponent } from '../../base-widget/base-widget.component';
 
@@ -32,6 +31,8 @@ export class WidgetHistoricalComponent extends BaseWidgetComponent implements On
   chartDataMin = [];
   chartDataAvg = [];
   chartDataMax = [];
+  center_ = null;
+  range_ = null;
 
   textColor; // store the color of text for the graph...
 
@@ -51,6 +52,7 @@ export class WidgetHistoricalComponent extends BaseWidgetComponent implements On
       minValue: null,
       maxValue: null,
       verticalGraph: false,
+      rotaryAxis: false,
     };
    }
 
@@ -121,6 +123,7 @@ export class WidgetHistoricalComponent extends BaseWidgetComponent implements On
             ...(this.widgetProperties.config.includeZero && { beginAtZero: true}),
             ticks: {
               color: this.textColor,
+              callback: this.centeredTickLabel.bind(this),
               autoSkip: true,
               autoSkipPadding: 40
             }
@@ -171,48 +174,149 @@ export class WidgetHistoricalComponent extends BaseWidgetComponent implements On
     }
   }
 
+  private toUser(centered) {
+    let v = centered;
+    let c = this.center_;
+    let r = this.range_;
+    let ret = ((0 > v ? v + r : v) + c) % r;
+    return Math.round(ret);
+  }
+
+  private toCentered(user) {
+    // shift so that center value is at 0 in the middle of the scale
+    let centered = user - this.center_;
+    // deal with parts that are < -180 or > 180 degree
+    centered = 
+      centered > (this.range_ / 2) ? (centered - this.range_) : 
+      centered < -(this.range_ / 2) ? (centered + this.range_) : 
+      centered;
+    return centered;
+  }
+
+  private centeredTickLabel(_value, index, values) {
+    if (this.center_ === null || !this.widgetProperties.config.rotaryAxis) {
+      return _value;
+    }
+
+    const compassRose = {
+     0: "N",
+     45: "ne",
+     90: "E",
+     135: "se",
+     180: "S",
+     225: "sw",
+     270: "W",
+     315: "nw",
+   };
+   const lookupDirection = (direction) => compassRose[direction] || direction;
+
+    let ret = lookupDirection(this.toUser(_value));
+    
+    return ret;
+  }
+
+
+  private reduceData(input, valueField, maxPoints) {
+    if (input === null) {
+      return null;
+    }
+
+    let noNulls = input.filter(function(item) {return item[valueField] !== null;});
+    let unique = noNulls.filter(function(item, pos, ary) {return !pos || item.timestamp != ary[pos - 1].timestamp});
+    let translated = unique.map(a => ({timestamp: a.timestamp, y: a[valueField]}));
+
+    let clean = [];
+    let chunkSize = Math.max(3, Math.floor(translated.length / maxPoints));
+    let halfChunk = Math.floor(chunkSize / 2);
+    for (let i = halfChunk; i < translated.length - halfChunk; i += chunkSize) {
+      let slice = translated.slice(i - halfChunk, i + halfChunk + 1);
+      clean.push({timestamp: translated[i].timestamp, y: slice.sort((a, b) => (a.y - b.y))[halfChunk].y});
+    }
+
+    let units = this.applyUnits(clean);
+    return this.widgetProperties.config.rotaryAxis ? this.centerData(units, 'average' == valueField) : units;
+  }
+
+  private applyUnits(input) {
+    if (null === input || input.length < 1) {
+      return input;
+    }
+
+    let invert = this.widgetProperties.config.invertData ? - 1 : 1;    
+    let ret = input.map((a) => (
+      {timestamp: a.timestamp, 
+       y: this.unitsService.convertUnit(this.widgetProperties.config.convertUnitTo, a.y) * invert}));
+
+    return ret;
+  }
+
+  private centerData(input, recenter) {
+    if (null === input || input.length < 1) {
+      return input;
+    }
+
+    //let xAxis = this.config.verticalGraph ? 'y' : 'x';
+    let yAxis = this.widgetProperties.config.verticalGraph ? 'x' : 'y';
+
+    if (this.chart.config.options.scales[yAxis].suggestedMax == null ||
+        this.chart.config.options.scales[yAxis].suggestedMin == null) {
+      this.range_ = null;
+      this.center_ = null;
+      return input;
+    }
+
+    this.range_ = this.chart.config.options.scales[yAxis].suggestedMax - this.chart.config.options.scales[yAxis].suggestedMin;
+
+    this.chart.config.options.scales[yAxis].min = -this.range_ / 2;
+    this.chart.config.options.scales[yAxis].max = this.range_ / 2;
+    this.chart.config.options.scales[yAxis].ticks.stepSize = this.range_ / 8;
+
+    if (recenter) {
+      let c = input[input.length - 1].y;
+      let step = (this.range_ / 8);
+      this.center_ = Math.ceil(c / step) * step;
+    }
+
+    let ret = input.map(a => ({timestamp: a.timestamp, y: this.toCentered(a.y)}));
+    return ret;
+  }
+
   private subscribeDataSet() {
       this.unsubscribeDataSet();
       if (this.widgetProperties.config.dataSetUUID === null) { return } // nothing to sub to...
 
       this.dataSetSub = this.dataSetService.subscribeDataSet(this.widgetProperties.uuid, this.widgetProperties.config.dataSetUUID).subscribe(
           dataSet => {
-              if (dataSet === null) {
+
+              let filtered = this.reduceData(dataSet, 'average', 24*2);
+              if (filtered === null) {
                 return; // we will get null back if we subscribe to a dataSet before the app has started it. When it learns about it we will get first value
               }
-              let invert = 1;
-              if (this.widgetProperties.config.invertData) { invert = -1; }
               //Avg
               this.chartDataAvg = [];
-              for (let i=0;i<dataSet.length;i++){
-                if (dataSet[i].average === null) {
-                  this.chartDataAvg.push({x: dataSet[i].timestamp, y: null });
-                  continue;
-                }
-                this.chartDataAvg.push({
-                  x: dataSet[i].timestamp,
-            y: (this.unitsService.convertUnit(this.widgetProperties.config.convertUnitTo, dataSet[i].average) * invert)
-                });
+              for (let i = 0; i < filtered.length; ++i) {
+                this.chartDataAvg.push({x: filtered[i].timestamp, y: filtered[i].y});
               }
+
               this.chart.config.data.datasets[0].data = this.chartDataAvg;
 
               //min/max
               if (this.widgetProperties.config.displayMinMax) {
                 this.chartDataMin = [];
                 this.chartDataMax = [];
-                for (let i=0;i<dataSet.length;i++){
-                  //process datapoint and add it to our chart.
-                  if (dataSet[i].average === null) {
-                    this.chartDataMin.push({x: dataSet[i].timestamp, y: null });
-                  } else {
-                    this.chartDataMin.push({
-                        x: dataSet[i].timestamp,
-                y: (this.unitsService.convertUnit(this.widgetProperties.config.convertUnitTo, dataSet[i].minValue) * invert)
-                    });
-                    this.chartDataMax.push({
-                        x: dataSet[i].timestamp,
-                y: (this.unitsService.convertUnit(this.widgetProperties.config.convertUnitTo, dataSet[i].maxValue) * invert)
-                    });
+
+                let filteredMin = this.reduceData(dataSet, 'minValue', 24 * 2);
+                if ( filteredMin !== null) {
+                  for (let i=0;i<filteredMin.length;i++){ 
+                    //process datapoint and add it to our chart. 
+                    this.chartDataMin.push({x: filteredMin[i].timestamp, y: filteredMin[i].y});
+                  }
+                }
+
+                let filteredMax = this.reduceData(dataSet, 'maxValue', 24 * 2);
+                if ( filteredMax !== null) {
+                  for (let i=0;i<filteredMax.length;i++){
+                    this.chartDataMax.push({x: filteredMax[i].timestamp, y: filteredMax[i].y});
                   }
                 }
                 this.chart.config.data.datasets[1].data = this.chartDataMin;

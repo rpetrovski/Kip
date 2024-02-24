@@ -233,7 +233,8 @@ export const DemoWidgetConfig: IWidgetConfig = {
         "showMin": true,
         "showMax": true,
         "numDecimal": 1,
-        "numInt": 1
+        "numInt": 1,
+	"rotaryAxis": false
       }
     },
     {
@@ -272,7 +273,8 @@ export const DemoWidgetConfig: IWidgetConfig = {
         "includeZero": true,
         "minValue": null,
         "maxValue": null,
-        "verticalGraph": false
+        "verticalGraph": false,
+        "rotaryAxis": false
       }
     },
     {

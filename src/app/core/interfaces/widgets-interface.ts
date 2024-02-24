@@ -189,6 +189,8 @@ export interface IWidgetSvcConfig {
 
   /** Use by racetimer widget */
   timerLength?: number;
+
+  rotaryAxis?: boolean;
 }
 
 /**
