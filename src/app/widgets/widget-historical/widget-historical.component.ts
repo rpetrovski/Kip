@@ -125,7 +125,8 @@ export class WidgetHistoricalComponent extends BaseWidgetComponent implements On
               color: this.textColor,
               callback: this.centeredTickLabel.bind(this),
               autoSkip: true,
-              autoSkipPadding: 40
+              autoSkipPadding: 40,
+	      precision: 0
             }
           },
           [xAxis]: {
