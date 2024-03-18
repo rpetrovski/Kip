@@ -32,7 +32,6 @@ export class WidgetHistoricalComponent extends BaseWidgetComponent implements On
   chartDataAvg = [];
   chartDataMax = [];
   center_ = null;
-  range_ = null;
 
   textColor; // store the color of text for the graph...
 
@@ -175,21 +174,21 @@ export class WidgetHistoricalComponent extends BaseWidgetComponent implements On
     }
   }
 
-  private toUser(centered) {
+  private toUser(centered, center = this.center_) {
     let v = centered;
-    let c = this.center_;
-    let r = this.range_;
+    let c = center;
+    let r = this.range();
     let ret = ((0 > v ? v + r : v) + c) % r;
     return Math.round(ret);
   }
 
-  private toCentered(user) {
+  private toCentered(user, center = this.center_) {
     // shift so that center value is at 0 in the middle of the scale
-    let centered = user - this.center_;
+    let centered = user - center;
     // deal with parts that are < -180 or > 180 degree
     centered = 
-      centered > (this.range_ / 2) ? (centered - this.range_) : 
-      centered < -(this.range_ / 2) ? (centered + this.range_) : 
+      centered > (this.range() / 2) ? (centered - this.range()) : 
+      centered < -(this.range() / 2) ? (centered + this.range()) : 
       centered;
     return centered;
   }
@@ -201,13 +200,13 @@ export class WidgetHistoricalComponent extends BaseWidgetComponent implements On
 
     const compassRose = {
      0: "N",
-     45: "ne",
+     45: "Ne",
      90: "E",
-     135: "se",
+     135: "Se",
      180: "S",
-     225: "sw",
+     225: "Sw",
      270: "W",
-     315: "nw",
+     315: "Nw",
    };
    const lookupDirection = (direction) => compassRose[direction] || direction;
 
@@ -222,20 +221,41 @@ export class WidgetHistoricalComponent extends BaseWidgetComponent implements On
       return null;
     }
 
-    let noNulls = input.filter(function(item) {return item[valueField] !== null;});
-    let unique = noNulls.filter(function(item, pos, ary) {return !pos || item.timestamp != ary[pos - 1].timestamp});
-    let translated = unique.map(a => ({timestamp: a.timestamp, y: a[valueField]}));
+    let noNulls = input.filter(function(item) {return item['minValue'] !== null && item['maxValue'] !== null && item['average'] !== null;});
+    const range = this.range();
+    let unique = noNulls.filter(function(item, pos, ary) {return !pos || item.timestamp !== ary[pos - 1].timestamp});
+    let translated = unique.map(a => ({timestamp: a.timestamp, mi: a['minValue'], a: a['average'], ma: a['maxValue']}));
+
+    let units = this.applyUnits(translated);
+    let noCcw = !this.widgetProperties.config.rotaryAxis ? units :
+          units.filter(function(a) {return a.ma - a.mi < range / 2});
 
     let clean = [];
-    let chunkSize = Math.max(3, Math.floor(translated.length / maxPoints));
+    let chunkSize = Math.max(3, Math.floor(noCcw.length / maxPoints));
     let halfChunk = Math.floor(chunkSize / 2);
-    for (let i = halfChunk; i < translated.length - halfChunk; i += chunkSize) {
-      let slice = translated.slice(i - halfChunk, i + halfChunk + 1);
-      clean.push({timestamp: translated[i].timestamp, y: slice.sort((a, b) => (a.y - b.y))[halfChunk].y});
+    let center = noCcw.slice(-1)[0].y;
+    for (let i = halfChunk; i < noCcw.length - halfChunk; i += chunkSize) {
+      let slice = noCcw.slice(i - halfChunk, i + halfChunk + 1);
+
+      if ('minValue' == valueField) {
+        const min = slice.reduce((a, b) => Math.min(a, b.mi), Infinity);
+        clean.push({timestamp: noCcw[i].timestamp, y: min});
+      }
+      else if ('maxValue' == valueField) {
+        const max = slice.reduce((a, b) => Math.max(a, b.ma), -Infinity);
+        clean.push({timestamp: noCcw[i].timestamp, y: max});
+      }
+      else {
+         clean.push({timestamp: noCcw[i].timestamp, y: slice.sort((a, b) => (a.a - b.a))[halfChunk].a});
+      }
     }
 
-    let units = this.applyUnits(clean);
-    return this.widgetProperties.config.rotaryAxis ? this.centerData(units, 'average' == valueField) : units;
+    if (this.widgetProperties.config.rotaryAxis) {
+      let centered = this.centerData(clean, 'average' == valueField);
+      return centered
+    }
+
+    return clean;
   }
 
   private applyUnits(input) {
@@ -246,36 +266,46 @@ export class WidgetHistoricalComponent extends BaseWidgetComponent implements On
     let invert = this.widgetProperties.config.invertData ? - 1 : 1;    
     let ret = input.map((a) => (
       {timestamp: a.timestamp, 
-       y: this.unitsService.convertUnit(this.widgetProperties.config.convertUnitTo, a.y) * invert}));
+       mi: this.unitsService.convertUnit(this.widgetProperties.config.convertUnitTo, a.mi) * invert,
+       a: this.unitsService.convertUnit(this.widgetProperties.config.convertUnitTo, a.a) * invert,
+       ma: this.unitsService.convertUnit(this.widgetProperties.config.convertUnitTo, a.ma) * invert}));
 
     return ret;
   }
 
-  private centerData(input, recenter) {
-    if (null === input || input.length < 1) {
-      return input;
+  private yAxis() {
+    return  this.widgetProperties.config.verticalGraph ? 'x' : 'y';
+  }
+
+  private range() {
+    if (this.chart.config.options.scales[this.yAxis()].suggestedMax == null ||
+        this.chart.config.options.scales[this.yAxis()].suggestedMin == null) {
+      return null;
     }
 
-    //let xAxis = this.config.verticalGraph ? 'y' : 'x';
-    let yAxis = this.widgetProperties.config.verticalGraph ? 'x' : 'y';
+    return this.chart.config.options.scales[this.yAxis()].suggestedMax - this.chart.config.options.scales[this.yAxis()].suggestedMin;
+  }
 
-    if (this.chart.config.options.scales[yAxis].suggestedMax == null ||
-        this.chart.config.options.scales[yAxis].suggestedMin == null) {
-      this.range_ = null;
+  private centerData(input, recenter) {
+    if (null === input || input.length < 1 || this.range() == null) {
       this.center_ = null;
       return input;
     }
 
-    this.range_ = this.chart.config.options.scales[yAxis].suggestedMax - this.chart.config.options.scales[yAxis].suggestedMin;
+    if (recenter || this.center_ == null) {
+      let yAxis = this.yAxis();
+    
+//      console.log("sMax:", this.chart.config.options.scales[yAxis].suggestedMax);
+//      console.log("sMin:", this.chart.config.options.scales[yAxis].suggestedMin);
 
-    this.chart.config.options.scales[yAxis].min = -this.range_ / 2;
-    this.chart.config.options.scales[yAxis].max = this.range_ / 2;
-    this.chart.config.options.scales[yAxis].ticks.stepSize = this.range_ / 8;
+      this.chart.config.options.scales[yAxis].min = -this.range() / 2;
+      this.chart.config.options.scales[yAxis].max = this.range() / 2;
+      this.chart.config.options.scales[yAxis].ticks.stepSize = this.range() / 8;
 
-    if (recenter) {
       let c = input[input.length - 1].y;
-      let step = (this.range_ / 8);
-      this.center_ = Math.ceil(c / step) * step;
+      let step = (this.range() / 8);
+      this.center_ = Math.round(c / step) * step;
+//      console.log("new center:", c, "->", this.center_);
     }
 
     let ret = input.map(a => ({timestamp: a.timestamp, y: this.toCentered(a.y)}));
