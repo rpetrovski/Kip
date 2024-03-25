@@ -228,31 +228,20 @@ export class WidgetHistoricalComponent extends BaseWidgetComponent implements On
 
     let units = this.applyUnits(translated);
     let noCcw = !this.widgetProperties.config.rotaryAxis ? units :
-          units.filter(function(a) {return a.ma - a.mi < range / 2});
+          units.filter(function(a) {return a.ma - a.mi < range / 2 && a.ma >= a.a && a.mi <= a.a});
+
+    let centered = this.widgetProperties.config.rotaryAxis ? this.centerData(noCcw, 'average' == valueField) : noCcw;
 
     let clean = [];
-    let chunkSize = Math.max(3, Math.floor(noCcw.length / maxPoints));
+    let chunkSize = Math.max(3, Math.floor(centered.length / maxPoints));
     let halfChunk = Math.floor(chunkSize / 2);
-    let center = noCcw.slice(-1)[0].y;
-    for (let i = halfChunk; i < noCcw.length - halfChunk; i += chunkSize) {
-      let slice = noCcw.slice(i - halfChunk, i + halfChunk + 1);
+    for (let i = halfChunk; i < centered.length - halfChunk; i += chunkSize) {
+      let slice = centered.slice(i - halfChunk, i + halfChunk + 1);
 
-      if ('minValue' == valueField) {
-        const min = slice.reduce((a, b) => Math.min(a, b.mi), Infinity);
-        clean.push({timestamp: noCcw[i].timestamp, y: min});
-      }
-      else if ('maxValue' == valueField) {
-        const max = slice.reduce((a, b) => Math.max(a, b.ma), -Infinity);
-        clean.push({timestamp: noCcw[i].timestamp, y: max});
-      }
-      else {
-         clean.push({timestamp: noCcw[i].timestamp, y: slice.sort((a, b) => (a.a - b.a))[halfChunk].a});
-      }
-    }
-
-    if (this.widgetProperties.config.rotaryAxis) {
-      let centered = this.centerData(clean, 'average' == valueField);
-      return centered
+      const min = slice.reduce((a, b) => Math.min(a, b.mi), Infinity);
+      const max = slice.reduce((a, b) => Math.max(a, b.ma), -Infinity);
+      const med = slice.sort((a, b) => (a.a - b.a))[halfChunk].a;
+      clean.push({timestamp: noCcw[i].timestamp, mi: min, a: med, ma: max});
     }
 
     return clean;
@@ -302,13 +291,13 @@ export class WidgetHistoricalComponent extends BaseWidgetComponent implements On
       this.chart.config.options.scales[yAxis].max = this.range() / 2;
       this.chart.config.options.scales[yAxis].ticks.stepSize = this.range() / 8;
 
-      let c = input[input.length - 1].y;
+      let c = input[input.length - 1].a;
       let step = (this.range() / 8);
       this.center_ = Math.round(c / step) * step;
 //      console.log("new center:", c, "->", this.center_);
     }
 
-    let ret = input.map(a => ({timestamp: a.timestamp, y: this.toCentered(a.y)}));
+    let ret = input.map(a => ({timestamp: a.timestamp, mi: this.toCentered(a.mi), a: this.toCentered(a.a), ma: this.toCentered(a.ma)}));
     return ret;
   }
 
@@ -326,7 +315,7 @@ export class WidgetHistoricalComponent extends BaseWidgetComponent implements On
               //Avg
               this.chartDataAvg = [];
               for (let i = 0; i < filtered.length; ++i) {
-                this.chartDataAvg.push({x: filtered[i].timestamp, y: filtered[i].y});
+                this.chartDataAvg.push({x: filtered[i].timestamp, y: filtered[i].a});
               }
 
               this.chart.config.data.datasets[0].data = this.chartDataAvg;
@@ -336,35 +325,29 @@ export class WidgetHistoricalComponent extends BaseWidgetComponent implements On
                 this.chartDataMin = [];
                 this.chartDataMax = [];
 
-                let filteredMin = this.reduceData(dataSet, 'minValue', 24 * 2);
-                if ( filteredMin !== null) {
-                  for (let i=0;i<filteredMin.length;i++){ 
-                    //process datapoint and add it to our chart. 
-                    this.chartDataMin.push({x: filteredMin[i].timestamp, y: filteredMin[i].y});
-                  }
-                }
-
-                let filteredMax = this.reduceData(dataSet, 'maxValue', 24 * 2);
-                if ( filteredMax !== null) {
-                  for (let i=0;i<filteredMax.length;i++){
-                    this.chartDataMax.push({x: filteredMax[i].timestamp, y: filteredMax[i].y});
-                  }
+                for (let i=0;i<filtered.length;i++) { 
+                  this.chartDataMin.push({x: filtered[i].timestamp, y: filtered[i].mi});
+                  this.chartDataMax.push({x: filtered[i].timestamp, y: filtered[i].ma});
                 }
                 this.chart.config.data.datasets[1].data = this.chartDataMin;
                 this.chart.config.data.datasets[2].data = this.chartDataMax;
               }
 
-            const average = arr => arr.reduce((p, c) => p + c, 0) / arr.length;
+              const average = arr => arr.reduce((p, c) => p + c, 0) / arr.length;
               //if (this.widgetConfig.animateGraph) {
               //  this.chart.update();
               //} else {
                 // append the cumulated average to the label text
-            this.chart.data.datasets[0].label = this.widgetProperties.config.displayName + " [" + average(this.chartDataAvg.map(e => e.y)).toFixed(2) + "]";
-            if (this.widgetProperties.config.displayMinMax) {
-              this.chart.data.datasets[1].label = this.widgetProperties.config.displayName + " [" + average(this.chartDataMin.map(e => e.y)).toFixed(2) + "]";
-              this.chart.data.datasets[2].label = this.widgetProperties.config.displayName + " [" + average(this.chartDataMax.map(e => e.y)).toFixed(2) + "]";
-            }
-            this.chart.update('none');
+              if (!this.widgetProperties.config.rotaryAxis) {
+                this.chart.data.datasets[0].label = this.widgetProperties.config.displayName + " [" + average(this.chartDataAvg.map(e => e.y)).toFixed(2) + "]";
+                if (this.widgetProperties.config.displayMinMax) {
+                  const min = this.chartDataMin.reduce((a, b) => Math.min(a, b.y), Infinity);
+                  const max = this.chartDataMax.reduce((a, b) => Math.max(a, b.y), -Infinity);
+                  this.chart.data.datasets[1].label = this.widgetProperties.config.displayName + " [" + min.toFixed(2) + "]";
+                  this.chart.data.datasets[2].label = this.widgetProperties.config.displayName + " [" + max.toFixed(2) + "]";
+                }
+              }
+              this.chart.update('none');
               //}
           }
       );
